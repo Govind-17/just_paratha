@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { SplashScreen } from './components/SplashScreen';
 import { SpiceParticles } from './components/SpiceParticles';
@@ -30,6 +30,9 @@ export default function App() {
   const [shufflingItem, setShufflingItem] = useState<MenuItem | null>(null);
   const [isChefSpecial, setIsChefSpecial] = useState(false);
 
+  // Refs for logic that doesn't need re-renders
+  const mountTimeRef = useRef(Date.now());
+
   // Derived Cart Data
   const cartTotalItems = useMemo(() => cart.reduce((acc, item) => acc + item.quantity, 0), [cart]);
   const cartTotalPrice = useMemo(() => cart.reduce((acc, item) => acc + (item.price * item.quantity), 0), [cart]);
@@ -57,7 +60,7 @@ export default function App() {
         clearTimeout(idleTimer);
         // Hint after 10 seconds of inactivity
         idleTimer = window.setTimeout(() => {
-            if (!selectedItem && !isCartOpen) {
+            if (!selectedItem && !isCartOpen && !isShuffling) {
                setShowIdleHint(true);
             }
         }, 10000); 
@@ -68,12 +71,41 @@ export default function App() {
     window.addEventListener('scroll', resetIdle);
     resetIdle(); 
 
-    // Shake Detection
-    let lastX = 0, lastY = 0, lastZ = 0;
+    // Shake Detection Variables
+    let lastX: number | null = null;
+    let lastY: number | null = null;
+    let lastZ: number | null = null;
     let lastTime = 0;
-    const threshold = 20; // Sensitivity
+    
+    // Thresholds - INCREASED to prevent accidental triggers
+    const ACC_THRESHOLD = 25; // m/s² for acceleration (no gravity). 25 is roughly 2.5g.
+    const GRAVITY_THRESHOLD = 800; // Speed unit for gravity-included fallback.
 
     const handleMotion = (e: DeviceMotionEvent) => {
+        // 1. Safety Delay: Ignore all motion for first 2 seconds after mount to prevent load triggers
+        if (Date.now() - mountTimeRef.current < 2000) return;
+
+        // 2. PREFERRED METHOD: Acceleration (excluding gravity)
+        // This is much more accurate for shakes and ignores tilting.
+        const acc = e.acceleration;
+        if (acc && acc.x !== null && acc.y !== null && acc.z !== null) {
+             const x = acc.x;
+             const y = acc.y;
+             const z = acc.z;
+             
+             // Calculate vector magnitude
+             const magnitude = Math.sqrt(x*x + y*y + z*z);
+             
+             if (magnitude > ACC_THRESHOLD) {
+                 handleShakeTrigger();
+                 resetIdle();
+             }
+             return;
+        }
+
+        // 3. FALLBACK METHOD: AccelerationIncludingGravity
+        // Used if the device doesn't provide raw acceleration.
+        // Requires high threshold to filter out rotation/tilting.
         const current = e.accelerationIncludingGravity;
         if (!current) return;
         
@@ -85,10 +117,21 @@ export default function App() {
             const y = current.y || 0;
             const z = current.z || 0;
 
-            const speed = Math.abs(x + y + z - lastX - lastY - lastZ) / diffTime * 10000;
+            if (lastX === null || lastY === null || lastZ === null) {
+                lastX = x;
+                lastY = y;
+                lastZ = z;
+                return;
+            }
 
-            if (speed > threshold) {
-                // Shake detected
+            const deltaX = Math.abs(x - lastX);
+            const deltaY = Math.abs(y - lastY);
+            const deltaZ = Math.abs(z - lastZ);
+
+            // Speed calculation compatible with shake.js logic
+            const speed = (deltaX + deltaY + deltaZ) / diffTime * 10000;
+
+            if (speed > GRAVITY_THRESHOLD) {
                 handleShakeTrigger();
                 resetIdle(); 
             }
@@ -111,15 +154,16 @@ export default function App() {
         }
         clearTimeout(idleTimer);
     };
-  }, [selectedItem, isCartOpen, isShuffling]);
+  }, [selectedItem, isCartOpen, isShuffling]); // Dependencies ensure fresh closure access
 
   const handleShakeTrigger = () => {
-    // Prevent re-entry if already showing modal or shuffling
-    if (selectedItem || isShuffling || isCartOpen) return;
+    // Prevent re-entry check using the ref to be absolutely sure or checking the DOM state
+    // (Using state variable `isShuffling` via closure is standard)
+    if (isShuffling || selectedItem || isCartOpen) return;
     
     // Start Shuffle
     setIsShuffling(true);
-    setShowIdleHint(false); // Hide hint if active
+    setShowIdleHint(false);
     
     // Initial Haptic
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
@@ -128,20 +172,16 @@ export default function App() {
 
     const allItems = MENU_DATA.flatMap(c => c.items);
     let count = 0;
-    const maxCount = 20; // Number of shuffles
-    const initialDelay = 50;
+    const maxCount = 20; 
     
-    // Recursive timeout for varying speed if desired, or simple interval
     const runShuffle = () => {
-        // Pick random item for visual
         const randomItem = allItems[Math.floor(Math.random() * allItems.length)];
         setShufflingItem(randomItem);
         count++;
 
         if (count < maxCount) {
-             setTimeout(runShuffle, 80); // Speed of shuffle
+             setTimeout(runShuffle, 80);
         } else {
-             // Finish
              finishShuffle(allItems);
         }
     };
@@ -150,18 +190,15 @@ export default function App() {
   };
 
   const finishShuffle = (allItems: MenuItem[]) => {
-      // Pick winner
       const winner = allItems[Math.floor(Math.random() * allItems.length)];
       setShufflingItem(winner);
       
-      // Dramatic pause before showing detail
       setTimeout(() => {
           setIsShuffling(false);
           setShufflingItem(null);
           setSelectedItem(winner);
-          setIsChefSpecial(true); // Flag for badge
+          setIsChefSpecial(true);
           
-          // Success Haptic
           if (typeof navigator !== 'undefined' && navigator.vibrate) {
             navigator.vibrate([200, 100, 200]); 
           }
@@ -174,19 +211,15 @@ export default function App() {
         try {
             const response = await (DeviceMotionEvent as any).requestPermission();
             if (response === 'granted') {
-                // Permission granted, trigger a demo shake to show it works
                 handleShakeTrigger();
             } else {
                 alert("Permission denied. Shake feature requires motion access.");
             }
         } catch (e) {
             console.error(e);
-            // Fallback for non-iOS or error
             handleShakeTrigger();
         }
     } else {
-        // Non-iOS devices usually don't need explicit permission trigger, 
-        // but if the user clicked the button, run the shuffle anyway.
         handleShakeTrigger();
     }
   };
@@ -326,7 +359,7 @@ export default function App() {
                 </motion.div>
                 <div className="flex flex-col items-start">
                     <span className="text-sm font-bold">Can't decide?</span>
-                    <span className="text-xs text-gray-300">Shake your phone for a surprise!</span>
+                    <span className="text-xs text-gray-300">Tap me or shake phone!</span>
                 </div>
                 <Wand2 size={16} className="text-yellow-400 ml-1" />
             </motion.button>
