@@ -1,6 +1,0 @@
-react
-react-dom
-framer-motion
-lucide-react
-tailwindcss
-typescript
