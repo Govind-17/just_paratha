@@ -1,5 +1,6 @@
 
 export enum CategoryId {
+  SPECIALS = 'specials',
   PARATHAS = 'parathas',
   THALIS = 'thalis',
   SABJI = 'sabji',
@@ -18,6 +19,7 @@ export interface MenuItem {
   isPopular?: boolean;
   isVeg: boolean;
   ingredients?: string[];
+  isCustom?: boolean; // Flag for owner-added items
 }
 
 export interface CartItem extends MenuItem {
